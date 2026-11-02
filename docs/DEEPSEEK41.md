@@ -48,6 +48,35 @@ the attention output matrix is one 2-D tensor instead of a 3-D one, and there is
 reads both. The Engram has the same name and size in both layouts but another hash; either one works with either layout, and setup downloads the pinned one
 if you have none. The download default is still the four-shard files.
 
+**Download the six-shard layout (opt-in, source setup).**
+
+```sh
+./setup.sh --family deepseek41 --model IST-DAS-2.25bpw --dsv41-layout six --build --no-start
+```
+
+`--dsv41-layout six` downloads the five `IQ2_XS-0000N-of-00006.gguf` files and the shared Engram from fixed revision
+`65d53bc8be65123e255ff02f3ded958b6dbf54fd`, checked against their sizes and SHA-256. It also works with the 1.75 and 2.00 bpw sets.
+The metadata, DSpark drafter and optional picture tower remain the separately pinned files used by Strata's pack recipe.
+An existing complete Engram from either layout is reused after verification. Old model shards stay in place; changing layouts downloads new
+model files and rebuilds the small pack that refers to them. Repeat the same option to resume a stopped six-shard download.
+Omit `--dsv41-layout` to keep the current four-shard download default, or use `--dsv41-layout four` to select it explicitly.
+`--gguf-dir` continues to detect local layouts automatically when no layout is specified.
+This option is for source setup (`setup.sh` / `START-HERE.bat`), rather than `strata launch`.
+
+**Download from ModelScope.** Use the existing `--source modelscope` option with the six-shard layout:
+
+```sh
+./setup.sh --family deepseek41 --model IST-DAS-2.25bpw \
+  --dsv41-layout six --source modelscope --build --no-start
+```
+
+The IST-DAS files come from [the same repository on ModelScope](https://modelscope.cn/models/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF).
+ModelScope serves its current files; Strata still checks them against the selected layout's fixed sizes and SHA-256 values.
+The same source option also applies to the separately downloaded model metadata, drafter and picture tower.
+If a file is unavailable there, setup prints a message and tries Hugging Face. The four-shard download default stays unchanged;
+use `--dsv41-layout six` to select the newer files available in this ModelScope repository.
+`--source` selects model downloads; build tools and engine packages keep their own sources.
+
 **On a Ryzen AI Max "Strix Halo" (Windows)** the graphics chip and the CPU share one pool of memory, so the engine counts it once: the
 128 GB box (a 64 GB BIOS carve-out plus the 64 GB Windows sees) keeps about 109 GB of the 2.00 set's experts in that pool (the dense
 weights and 12 GB for Windows and the desktop aside) and reads the other 23 GB from the SSD. Measured there (2.00 bpw, default Faster

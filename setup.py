@@ -143,7 +143,8 @@ def file_pin(url: str):
     m = HF_FILE.match(url)
     if m is None:
         return None
-    return REPO_PINS.get(m.group("repo"), {}).get(m.group("path").rsplit("/", 1)[-1])
+    pins = HF_REVISION_PINS.get((m.group("repo"), m.group("revision")), REPO_PINS.get(m.group("repo"), {}))
+    return pins.get(m.group("path").rsplit("/", 1)[-1])
 
 
 # ModelScope (www.modelscope.cn) hosts every repository above under the same name, with the same file paths and
@@ -154,7 +155,7 @@ def file_pin(url: str):
 # serving current files, not our pinned revision: setup never switches to it by itself, it recommends it, #908).
 MS_DEFAULT = "https://www.modelscope.cn"
 SOURCES = ("auto", "modelscope", "huggingface")
-HF_FILE = re.compile(r"^https?://[^/]+/(?P<repo>[^/]+/[^/]+)/resolve/[^/]+/(?P<path>.+)$")
+HF_FILE = re.compile(r"^https?://[^/]+/(?P<repo>[^/]+/[^/]+)/resolve/(?P<revision>[^/]+)/(?P<path>.+)$")
 _sources = {}                                      # model_source()'s answer per (STRATA_SOURCE, HF_ENDPOINT, host)
 _ms_files = {}
 
@@ -737,11 +738,13 @@ DSV41_LEGACY_NAMES = {
 }
 # The SIX-shard layout (0.2.8.1).  On 2026-10-27 (commit a419d74c, llama.cpp b11870 and newer) ISTA-DASLab re-split the three sets: five shards per set
 # (shard 1 is 5.8 MB of metadata and the tokenizer, no tensors) and the Engram as the sixth shard of the split.  The files are not the pinned ones, so they
-# are a second layout beside the four-shard one: setup downloads the pinned four-shard files as before (HF_REVISIONS stays at cb02422c, the owner decides
-# when the default moves), and takes this layout from "files already here" (--gguf-dir / --model-path, the app's "Use a local GGUF") by size and SHA-256.
+# are a second layout beside the four-shard one: setup downloads the pinned four-shard files by default (HF_REVISIONS stays at cb02422c).
+# --dsv41-layout six opts into downloading the six-shard files at DSV41_ISTA6_REVISION; local imports of both layouts are size/hash checked.
 # Same model: the experts and dense weights have the same types, shapes and sizes in both layouts; the converter folded the Engram gate (q_weight *
 # k_weight -> engram_gate), merged the two Engram tables into one tensor (per_layer_token_embd, the same 110,595,290,400 bytes) and added the image tokens'
 # routing bias (exp_probs_b_vl, used only for picture tokens).  The engine reads both (engram.gate.weight or q_weight/k_weight; ds4_model.cu).
+DSV41_ISTA6_REVISION = "65d53bc8be65123e255ff02f3ded958b6dbf54fd"  # 2026-10-28: six-shard files, verified against the Hub's LFS metadata
+DSV41_ISTA6_HF = f"{hf_endpoint()}/{DSV41_ISTA_REPO}/resolve/{DSV41_ISTA6_REVISION}/"
 DSV41_ISTA6_SHARD = "DeepSeek-V4.1-Flash-1017-GSQ-RCO-{quant}-{i:05d}-of-00006.gguf"
 DSV41_ISTA6_SHARDS = 5            # the files of a set itself; the sixth shard of its split is the Engram
 DSV41_ISTA6_FILES = {
@@ -867,6 +870,11 @@ REPO_PINS = {
     "agentionai/Qwen3.8-Flash-Next-Gyro-GGUF": GYRO_FILES,
     "unsloth/DeepSeek-V4.1-Flash-1017-GGUF": DSV41_FILES,
     "ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF": DSV41_ISTA_FILES,
+}
+# Additional opt-in revisions may give a shared filename different bytes (the converted Engram).
+# Keep the default repository pins intact and resolve these URLs by their exact revision.
+HF_REVISION_PINS = {
+    (DSV41_ISTA_REPO, DSV41_ISTA6_REVISION): {**DSV41_ISTA6_FILES, DSV41_ISTA_ENGRAM: DSV41_ENGRAM_CONVERTED},
 }
 # EXPERIMENTAL, off by default (setup asks): a control vector shipped with the repository, see its README
 ESP_VECTOR = ROOT / "data" / "experimental-speed-projection" / "Qwen3.8-Flash-Next-experimental-speed-projection.gguf"
@@ -3021,6 +3029,7 @@ def download(url, dst: Path, what=None):
         mark(dst)
         ok(f"{what or dst.name} copied")
         return
+    source_pin = file_pin(url)                         # keep the selected revision's hash if the source maps to ModelScope
     ms = ms_file(url) if model_source() == "modelscope" else None
     if ms is not None:
         if reachable(ms_url(*ms), timeout=30):
@@ -3031,7 +3040,7 @@ def download(url, dst: Path, what=None):
     part = dst.with_name(dst.name + ".part")
     total = 0
     # the file's pinned size and SHA-256, when it has them (ModelScope's copy is checked against the same pin)
-    pin = REPO_PINS.get(ms[0], {}).get(ms[1].rsplit("/", 1)[-1]) if ms is not None else file_pin(url)
+    pin = source_pin or (REPO_PINS.get(ms[0], {}).get(ms[1].rsplit("/", 1)[-1]) if ms is not None else None)
     for attempt in range(5):
         try:
             req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "strata-setup"})
@@ -8555,6 +8564,10 @@ def install_dsv41(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopted, 
         fail(dsv41_fit.not_here(model), "choose --model IST-DAS-2.00bpw or --model IST-DAS-2.25bpw (their files work with --gguf-dir too); nothing has been downloaded")
     ok(f"size: {model}")
     md = fam["models"][model]
+    requested_layout = getattr(a, "dsv41_layout", None)
+    if requested_layout and not md.get("shards6"):
+        fail("--dsv41-layout is only for the IST-DAS sets",
+             "choose IST-DAS-1.75bpw, IST-DAS-2.00bpw or IST-DAS-2.25bpw, or omit --dsv41-layout")
     say("  Its GGUF files: " + ("IST-DAS / ISTA-DASLab (huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF), with the DSpark drafter and a small metadata file from Unsloth"
                               if md.get("recipe") == "ista" else
                               "Unsloth (huggingface.co/unsloth/DeepSeek-V4.1-Flash-1017-GGUF); the Engram table is the same data as IST-DAS's, so a copy of it already here is used"
@@ -8570,10 +8583,14 @@ def install_dsv41(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopted, 
     if dsv41_context.note(ctx):
         warn(f"context {dsv41_context.label(ctx)}: {dsv41_context.note(ctx)}")
     folder = dsv41_folder(a, fam, tag, model)
-    layout = dsv41_layout_of(md, lambda n: (folder / n).exists()) if (ista and a.gguf_dir) else "four"
+    layout = requested_layout or (dsv41_layout_of(md, lambda n: (folder / n).exists()) if (ista and a.gguf_dir) else "four")
+    shard_hf = DSV41_ISTA6_HF if layout == "six" else (md.get("hf") or fam["hf"])
     shards = [dsv41_pick(folder, n) for n in (md["shards6"] if layout == "six" else md["shards"])]
     if layout == "six":
-        say(f"  {folder} holds ISTA-DASLab's six-shard files of 2026-10-27 ({len(shards)} files and the Engram as the sixth): they are used where they are.")
+        if a.gguf_dir:
+            say(f"  {folder} holds ISTA-DASLab's six-shard files of 2026-10-27 ({len(shards)} files and the Engram as the sixth): they are used where they are.")
+        else:
+            say(f"  Six-shard layout: {len(shards)} model files and the shared Engram as the sixth (revision {DSV41_ISTA6_REVISION[:8]}).")
     shared_dir = dsv41_shared_dir(a, fam)
     # Pictures are on by default (owner rule): the engine reads them with its own vision tower, which the pack carries when the tower's weights
     # (mmproj-BF16.gguf, a shared file) were there when it was made.  --vision no leaves the file out and the pack text-only.
@@ -8691,6 +8708,8 @@ def install_dsv41(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopted, 
     ok(f"engine: {exe}")
 
     step(5, f"downloading {fam['title']} {model}")
+    if model_source() == "modelscope":
+        say(f"  Downloading model files from ModelScope ({ms_endpoint()}); --source huggingface selects Hugging Face.")
     for f in shards:
         if f.exists() and done(f):
             ok(f"{f.name} already downloaded")
@@ -8698,7 +8717,7 @@ def install_dsv41(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopted, 
             if a.gguf_dir and not f.exists():
                 fail(f"{f} is missing", f"put {f.name} in {folder}, or drop --gguf-dir to download it")
             if not a.gguf_dir and f.name not in DSV41_LEGACY_FILES:      # (a first-release file is checked, never fetched under its old name)
-                download((md.get("hf") or fam["hf"]) + f.name, f)
+                download(shard_hf + f.name, f)
         if f.name in DSV41_LEGACY_FILES:
             ok(f"{f.name}: a file of the first release of this set (the same weights); it is used as it is")
         pin = fam["sha256"][f.name]
@@ -8708,11 +8727,15 @@ def install_dsv41(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopted, 
             ok(f"{f.name}: the version with ISTA's newer chat template (the same weights); it is used as it is")
         verify_sha256(f, *pin, own=bool(a.gguf_dir) or f.name in DSV41_LEGACY_FILES)
     for f in shared:                                  # the Engram, the drafter, the metadata shard: once for every official set
+        six_engram = requested_layout == "six" and f.name == DSV41_ISTA_ENGRAM
+        shared_hf = DSV41_ISTA6_HF if six_engram else DSV41_SHARED[f.name]
+        pin = DSV41_ENGRAM_CONVERTED if six_engram else fam["sha256"][f.name]
+        also = (DSV41_ISTA_FILES[f.name][1],) if six_engram else DSV41_SHA_ALSO.get(f.name, ())
         if f.exists() and (done(f) or own_files[f]):
             ok(f"{f.name} already here ({f.parent})")
         else:
-            download(DSV41_SHARED[f.name] + f.name, f)
-        verify_sha256(f, *fam["sha256"][f.name], own=own_files[f], also=DSV41_SHA_ALSO.get(f.name, ()))
+            download(shared_hf + f.name, f)
+        verify_sha256(f, *pin, own=own_files[f], also=also)
     ok(f"model files: {folder} ({len(shards)} shards" + (f"; shared files: {shared_dir if any(not own_files[f] for f in shared) else shared[0].parent}" if shared else "") + ")")
 
     step(6, "preparing the model for Strata")
@@ -9176,6 +9199,9 @@ def main() -> int:
     ap.add_argument("--set-default-data-dir", action="store_true",
                     help="with --data-dir: remember the new folder as the data folder without moving anything")
     ap.add_argument("--models-dir", help="where the GGUF files go (default: <data folder>/models)")
+    ap.add_argument("--dsv41-layout", choices=("four", "six"),
+                    help="IST-DAS DeepSeek files: six downloads the newer five model shards plus the shared Engram; "
+                         "four selects the older layout (default: four for downloads, auto-detect with --gguf-dir)")
     ap.add_argument("--dsv41-package", metavar="FILE", help="DeepSeek: the engine package you downloaded from the release page (a .tar.gz or .zip, "
                                                            "or its unpacked folder); it is checked and installed instead of being fetched")
     ap.add_argument("--feed", metavar="URL|DIR",
@@ -9249,6 +9275,10 @@ def main() -> int:
                          "sycl = Intel Arc, EXPERIMENTAL: Linux, built from source (docs/INTEL_ARC.md)")
     ap.add_argument("--skip-build", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
+    if a.dsv41_layout:
+        if a.family and a.family != "deepseek41":
+            ap.error("--dsv41-layout is only for --family deepseek41")
+        a.family, a.setup = "deepseek41", True       # an explicit layout requests setup even with a remembered install
     if a.model and a.model not in MODELS and a.family not in PREVIEW_FAMILIES and a.family not in MULTI_FILE_FAMILIES:
         ap.error(f"--model {a.model} is a size of " + ", ".join(f"--family {f}" for f, d in {**PREVIEW_FAMILIES, **MULTI_FILE_FAMILIES}.items()
                                                               if a.model in d["models"]))
