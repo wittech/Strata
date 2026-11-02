@@ -69,6 +69,9 @@ cd Strata
 ./setup.sh --build --no-start
 ```
 
+For DeepSeek on NVIDIA, use `./setup.sh --family deepseek41 --build --no-start`. Setup builds the separate
+`strata-dsv41` target for the selected GPUs and records its CUDA library paths in the start config.
+
 `--build` requests a source engine rather than a ready-made one. `--no-start` prevents serving;
 this is still setup and can download and prepare a model. Inspect the printed paths and generated config before
 claiming to have tested a code change. A released engine cannot validate changes to your local C++ files.

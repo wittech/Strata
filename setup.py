@@ -5977,6 +5977,40 @@ def build_engine(gpu, vision, yes, llama, toolkit=None) -> Path:
     return eng
 
 
+def build_dsv41_engine(gpu, yes, toolkit=13) -> tuple[Path, list[str]]:
+    """Compile DeepSeek's CUDA target for the selected cards, independently of the Qwen engine.
+    Always configure/build on --build so Ninja checks changed sources; keep Qwen's BUILD.json untouched.
+    """
+    acquisition.require("a DeepSeek engine build")
+    archs = sorted({int(x) for x in (gpu.get("archs") or [gpu["arch"]])})
+    nvcc, vcvars = install_build_tools({**gpu, "archs": archs, "toolkit": toolkit}, yes)
+    llama = get_llama_cpp()
+    bdir = ROOT / ("build-dsv41-cuda12" if int(toolkit) == 12 else "build-dsv41")
+    name = "strata-dsv41.exe" if WIN else "strata-dsv41"
+    floor = cpu_floor(cpu_info()[1])
+    say("  Compiling the DeepSeek engine for " + ", ".join(f"sm_{a}" for a in archs) + " ...")
+    cmake_build(ROOT, bdir, "strata-dsv41",
+                ["-DSTRATA_ENABLE_CUDA=ON", "-DSTRATA_BUILD_DSV41=ON", "-DSTRATA_BUILD_TESTS=OFF",
+                 "-DSTRATA_NATIVE_EXPERTS=ON", "-DSTRATA_PORTABLE=OFF", f"-DSTRATA_ISA_FLOOR={floor}",
+                 "-DCMAKE_CUDA_ARCHITECTURES=" + ";".join(str(a) for a in archs),
+                 f"-DCMAKE_CUDA_COMPILER={nvcc}", *toolkit_root_defs(nvcc), f"-DSTRATA_GGML_DIR={llama}",
+                 *host_compiler_defs(True), *engine_defs(archs, toolkit)],
+                vcvars, "build-dsv41-cuda12.bat" if int(toolkit) == 12 else "build-dsv41.bat")
+    built = bdir / name
+    if not built.is_file():
+        fail(f"the DeepSeek build finished without {built}",
+             f"check the build output and run setup --build again; the installed engine was left unchanged")
+    eng = ROOT / "engine"
+    eng.mkdir(exist_ok=True)
+    exe = eng / name
+    shutil.copy2(built, exe)
+    bindir = Path(nvcc).parent
+    lib_dirs = [str(d) for d in (bindir, bindir / "x64", bindir.parent / "lib64") if d.is_dir()]
+    ok(f"DeepSeek engine compiled: {exe}")
+    return exe, lib_dirs
+
+
+
 # ------------------------------------------------------------------------------------------------ the data folder
 # The model files - the GGUFs, the prepared packs and the MTP layer, 70-120 GB - live in a data folder NEXT TO the
 # Strata folder (`Strata-data`), not inside it: updating Strata by unzipping a new copy used to give a new, empty
@@ -8612,11 +8646,15 @@ def install_dsv41(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopted, 
     pip_install(runtime_packages(),
                 "numpy, jinja2, regex, pyyaml, tqdm, requests, cmake, ninja, pillow, psutil, textual (the screens)")
 
-    # DeepSeek runs on its own engine package: the Strata (Qwen) engine, its llama.cpp source and its CUDA libraries are not needed for it, so none of
-    # them is downloaded or test-started here (they were ~700 MB, and a stop on every one of them when GitHub could not be reached).
+    # Ready-made DeepSeek packages do not need the Qwen engine or llama.cpp sources. Only an explicit CUDA --build
+    # fetches the pinned llama.cpp checkout and compiles DeepSeek's own target.
     step(4, "the DeepSeek engine")
     eng, meta, lib_dirs = ROOT / "engine", {"version": None}, []
     exe = dsv41_exe(eng)
+    if getattr(a, "build", False) and not hip and not mac:
+        # --build requests DeepSeek itself, even when a prebuilt engine is already installed.
+        archs = sorted({int(c["arch"]) for c in cards if c.get("arch")}) or [int(gpu["arch"])]
+        exe, lib_dirs = build_dsv41_engine({**gpu, "archs": archs}, a.yes, toolkit=cuda_tk)
     if (exe is None and not getattr(a, "dsv41_package", None) and not dsv41_engine_pending(eng) and not local_feed(getattr(a, "feed", None))
         and not github_reachable()):
         fail("Strata can't reach GitHub to download the DeepSeek engine.",

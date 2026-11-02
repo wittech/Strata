@@ -23,6 +23,18 @@ The ARM64/DGX Spark package remains specific to `sm_121`; these recipe changes t
 
 ## Build DeepSeek for strata launch
 
+On NVIDIA, source setup now builds DeepSeek itself when `--build` is requested:
+
+```sh
+./setup.sh --family deepseek41 --build --no-start
+```
+
+It builds `strata-dsv41` for the selected cards, installs it in `engine/`, and saves the toolkit library paths in the model's start config.
+It does not fetch a ready-made DeepSeek engine in this mode. Repeating `--build` checks the source again even if an engine is already installed.
+Model files are still downloaded or prepared as needed; `--no-start` prevents serving.
+
+To build only the engine and use it with an installed Terminal, follow the manual steps below.
+
 On the NVIDIA machine, install a CUDA toolkit, C++ compiler, CMake and Ninja and fetch the pinned llama.cpp checkout as described in
 [source installation](SOURCE_INSTALL.md). From this Strata checkout, build for the detected GPU:
 
