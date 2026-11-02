@@ -118,6 +118,12 @@ and Linux `rx9070`. Build `strata-dsv41` with `packaging/build_dsv41_cuda.sh` or
 GPU architecture) into the folder `package_engine.py` packages; libraries the distribution provides are listed in
 `SYSTEM-LIBS.txt` inside the package so a missing one can be named on a target PC.
 
+The table above records the published packages. This checkout's x86_64 CUDA 13 recipe now builds the engine and picture reader for
+`75;80;86;89;90;120` (real code, plus PTX 120). The DeepSeek scripts and CMake default build
+`80-real;86-real;89-real;90-real;120`. This adds A100/A800 (`sm_80`) and H100/H200 (`sm_90`) to new builds; it does not change
+existing archives or the signed feed. Rebuild all included CUDA programs and record their actual architectures when packaging.
+Hardware validation of the additions is still needed. See [NVIDIA data center cards](../docs/NVIDIA_DATACENTER.md).
+
 ## hipBLASLt tuning tables in an AMD package
 
 An AMD package records the hipBLASLt it bundles (`hipblaslt_version` in BUILD.json, 1.5.0 is `100500`) and carries the tables of `tools/hip`

@@ -8639,12 +8639,13 @@ def install_dsv41(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopted, 
                      "not start on that card. Leave it out (--gpus ...) to be sure.")
     if exe is None:
         if os.environ.get("STRATA_VERBOSE") == "1" or "--verbose" in sys.argv:
-            say("  Details for developers: build it with cmake -DSTRATA_BUILD_DSV41=ON -DCMAKE_CUDA_ARCHITECTURES=<your card: 86 RTX 30, 89 RTX 40, 120 RTX 50> "
+            say("  Details for developers: build it with cmake -DSTRATA_BUILD_DSV41=ON -DCMAKE_CUDA_ARCHITECTURES=<your card: 80 A100/A800, 86 RTX 30, 89 RTX 40, 90 H100/H200, 120 RTX 50> "
                 "and point STRATA_DSV41_EXE at it (docs/DEEPSEEK41.md, \"Building the engine for your card\").")
         fail("DeepSeek's engine is not available for this computer yet",
              ("It runs on an Apple Silicon Mac with the Metal DeepSeek engine package from the Strata update feed. " if mac else
               "Supported graphics cards: NVIDIA RTX 30, 40 and 50 series, the Radeon AI PRO R9700, and a Ryzen AI Max (Strix Halo) on "
-              "Windows with the AMD DeepSeek engine package. "
+              "Windows with the AMD DeepSeek engine package. For A100/A800 (sm_80) or H100/H200 (sm_90), build an engine for that architecture "
+              "(docs/NVIDIA_DATACENTER.md); older release packages may lack its code. "
               + ("The DGX Spark (GB10) builds its own: spark/build_engine.sh puts strata-dsv41 beside the engine (docs/DGX_SPARK_LINUX.md). "
                  if is_arm64() else "")) + dsv41_manual_steps(eng)
              + " Or update Strata later (a newer version may add your card), pick another model, or build the engine for your card yourself "

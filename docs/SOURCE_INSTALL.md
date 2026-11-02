@@ -80,12 +80,14 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSTRATA_ENABLE_CUDA=ON -DCMAKE_C
 cmake --build build --target strata -j8
 ```
 
-`native` builds for the GPUs in this PC. Name the card instead for another one: `75` (RTX 20), `86` (RTX 30), `89` (RTX 40),
-`120` (RTX 50), or a list such as `"86;120"`. Without the option the build is for RTX 50 only and the configure step says so.
+`native` builds for the GPUs in this PC. Name the card instead for another one: `75` (RTX 20), `80` (A100/A800), `86` (RTX 30), `89` (RTX 40),
+`90` (H100/H200), `120` (RTX 50), or a list such as `"86;120"`. Without the option the build is for RTX 50 only and the configure step says so.
 
 Run against the resulting binary and the matching model config. Use the build instructions for
 [HIP](AMD_HIP.md), [SYCL](INTEL_ARC.md) or [Metal](MAC.md) when changing those backends.
 Follow [contribution validation requirements](../CONTRIBUTING.md) before requesting review.
+
+[NVIDIA data center cards](NVIDIA_DATACENTER.md) explains the build recipes and the limits of older downloaded packages.
 
 For the Terminal monitor from a checkout:
 

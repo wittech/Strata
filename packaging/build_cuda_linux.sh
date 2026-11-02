@@ -2,7 +2,7 @@
 # Build the Linux CUDA engine package for the release feed.
 #
 #   VARIANT=cuda12 packaging/build_cuda_linux.sh     # CUDA 12.9: GTX 10 (Pascal), Tesla P100, V100, and the newer cards up to sm_89
-#   VARIANT=cuda13 packaging/build_cuda_linux.sh     # CUDA 13: RTX 20 and newer (sm_75 .. sm_120)
+#   VARIANT=cuda13 packaging/build_cuda_linux.sh     # CUDA 13: RTX 20 and newer, A100/A800 (sm_80), H100/H200 (sm_90)
 #
 # Run it on a Linux x86_64 box with the CUDA toolkit of that variant on PATH (nvcc), a Python 3 venv with requirements.txt and
 # requirements-build.txt, and the pinned llama.cpp in third_party/llama.cpp (python -c "import setup; setup.get_llama_cpp()").
@@ -16,7 +16,7 @@ variant=${VARIANT:-cuda13}
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 case "$variant" in
   cuda12) archs=${ARCHS:-60;61;70;75;80;86;89}; mindriver=575.51; sm60=ON ;;
-  cuda13) archs=${ARCHS:-75;86;89;120}; mindriver=580.65; sm60=OFF ;;
+  cuda13) archs=${ARCHS:-75;80;86;89;90;120}; mindriver=580.65; sm60=OFF ;;
   *) echo "build_cuda_linux.sh: VARIANT must be cuda12 or cuda13" >&2; exit 2 ;;
 esac
 out=${OUT:-$repo/out-engine-$variant}

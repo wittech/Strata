@@ -221,9 +221,9 @@ elseif(STRATA_ENABLE_CUDA)
   set(_strata_cuda_arch_defaulted OFF)
   if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES AND NOT DEFINED ENV{CUDAARCHS})
     if(STRATA_BUILD_DSV41)
-      # #3935: the DeepSeek engine's own release shape (sm_86, sm_89, sm_120 + PTX 120, as packaging/build_dsv41_cuda.sh), so a hand
-      # build of strata-dsv41 with no architecture runs on an RTX 30, 40 or 50 card; the Qwen engine's default below is unchanged
-      set(CMAKE_CUDA_ARCHITECTURES "86-real;89-real;120" CACHE STRING "CUDA architectures")
+      # Match packaging/build_dsv41_cuda.sh: A100/A800 (sm_80), RTX 30/40 (sm_86/sm_89),
+      # H100/H200 (sm_90) and RTX 50 (sm_120 + PTX 120). The Qwen engine default below stays unchanged.
+      set(CMAKE_CUDA_ARCHITECTURES "80-real;86-real;89-real;90-real;120" CACHE STRING "CUDA architectures")
     else()
       set(CMAKE_CUDA_ARCHITECTURES 120 CACHE STRING "CUDA architectures")
     endif()
@@ -235,10 +235,10 @@ elseif(STRATA_ENABLE_CUDA)
   find_package(CUDAToolkit REQUIRED)
   option(STRATA_EXPERIMENTAL_SM60 "community build for GPUs below compute capability 7.5: Pascal sm_60, Volta sm_70 (#236)" OFF)
   if(_strata_cuda_arch_defaulted)
-    # a recommendation, not a refusal: the release engine is built for 75;86;89;120, a hand build names its card
+    # a recommendation, not a refusal: the release recipe builds for 75;80;86;89;90;120, a hand build names its card
     message(WARNING "Strata: CMAKE_CUDA_ARCHITECTURES was not set, so this build is for ${CMAKE_CUDA_ARCHITECTURES} only (sm_120 = RTX 50). For another "
-                    "card pass it: -DCMAKE_CUDA_ARCHITECTURES=native (the GPUs in this PC), 75 (RTX 20), 86 (RTX 30), "
-                    "89 (RTX 40), or a list like \"86;120\".")
+                    "card pass it: -DCMAKE_CUDA_ARCHITECTURES=native (the GPUs in this PC), 75 (RTX 20), 80 (A100/A800), 86 (RTX 30), "
+                    "89 (RTX 40), 90 (H100/H200), or a list like \"86;120\".")
   endif()
   foreach(_a IN LISTS CMAKE_CUDA_ARCHITECTURES)
     string(REGEX REPLACE "-.*$" "" _base "${_a}")     # 120-real / 120-virtual are still 120
