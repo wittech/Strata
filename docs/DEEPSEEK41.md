@@ -77,6 +77,12 @@ If a file is unavailable there, setup prints a message and tries Hugging Face. T
 use `--dsv41-layout six` to select the newer files available in this ModelScope repository.
 `--source` selects model downloads; build tools and engine packages keep their own sources.
 
+For a ModelScope file with a fixed SHA-256, different CDN `ETag` values no longer cause repeated "another version of the file" retries.
+Byte-range and length checks remain strict, and the complete file must match its pinned SHA-256 before it is marked finished.
+Existing `.part`, `.part.chunks` and `.part.src` files from the same URL are retained when resuming with the same content pin.
+After updating setup, stop a stuck download with Ctrl+C and repeat the same command with the same download source and layout.
+Downloads without a pinned SHA-256 keep the strict ETag check.
+
 **On a Ryzen AI Max "Strix Halo" (Windows)** the graphics chip and the CPU share one pool of memory, so the engine counts it once: the
 128 GB box (a 64 GB BIOS carve-out plus the 64 GB Windows sees) keeps about 109 GB of the 2.00 set's experts in that pool (the dense
 weights and 12 GB for Windows and the desktop aside) and reads the other 23 GB from the SSD. Measured there (2.00 bpw, default Faster

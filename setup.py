@@ -2451,8 +2451,9 @@ class _Source:
     """The URL the pieces are read from: the redirect (Hugging Face answers with a signed, time-limited CDN address) is
     resolved once and reused; it is resolved again a little before it expires and after a 401/403/410."""
 
-    def __init__(self, url: str, total: int):
+    def __init__(self, url: str, total: int, expected_sha256: str | None = None):
         self.url, self.total = url, total
+        self.expected_sha256 = expected_sha256          # pinned ModelScope files are verified by the caller after download/repair
         self.final, self.deadline = None, None
         self.etag = None                                 # the object the first answer named; every later answer must match
         self.lock = threading.Lock()
@@ -2467,9 +2468,10 @@ class _Source:
                 if r.status != 206 or cr != f"bytes 0-0/{self.total}":
                     raise _NoRange(f"HTTP {r.status}, Content-Range {cr!r}")
                 tag = _etag(r.headers)
-                if self.etag and tag and tag != self.etag:
-                    raise _Changed(f"the file on the server changed while it was downloaded ({self.etag[:12]} -> {tag[:12]})")
-                self.etag = self.etag or tag
+                if not self.expected_sha256:
+                    if self.etag and tag and tag != self.etag:
+                        raise _Changed(f"the file on the server changed while it was downloaded ({self.etag[:12]} -> {tag[:12]})")
+                    self.etag = self.etag or tag
                 r.read(1)
                 final = r.geturl() or self.url
             ttl = _url_ttl(final)
@@ -2578,26 +2580,36 @@ def _save_pieces(part: Path, total: int, done: set) -> bool:
         return False
 
 
-def _claim_part(part: Path, url: str, etag: str | None = None):
+def _claim_part(part: Path, url: str, etag: str | None = None, expected_sha256: str | None = None):
     """Record where a .part's bytes come from (<name>.part.src: the address asked, and the file's ETag when the server
     names one).  A .part written from another address (the other mirror, another revision) or from another version of
     the file is dropped with its piece list: two sources are not mixed inside one file, even when they should hold the
-    same bytes.  A .part from an older setup has no record and is kept as before."""
+    same bytes. For pinned ModelScope files, an expected SHA-256 identifies the content instead of a CDN ETag:
+    an older record with only an ETag is retained and upgraded, and the final hash must still match.
+    A .part from an older setup has no record and is kept as before."""
     src = part.with_name(part.name + ".src")
     try:
         old = json.loads(src.read_text(encoding="utf-8")) if src.is_file() else None
     except (OSError, ValueError):
         old = {}
     if old is not None:
-        same = isinstance(old, dict) and old.get("url") == url and not (old.get("etag") and etag and old.get("etag") != etag)
+        same = isinstance(old, dict) and old.get("url") == url
+        if same:
+            if expected_sha256:
+                same = not (old.get("sha256") and old["sha256"] != expected_sha256)
+            else:
+                same = not (old.get("etag") and etag and old["etag"] != etag)
         if not same:
             part.unlink(missing_ok=True)
             part.with_name(part.name + ".chunks").unlink(missing_ok=True)
             src.unlink(missing_ok=True)
             old = None
-    if old is None or (etag and not old.get("etag")):
+    if old is None or (etag and not old.get("etag")) or (expected_sha256 and old.get("sha256") != expected_sha256):
         try:
-            src.write_text(json.dumps({"url": url, "etag": etag}), encoding="utf-8")
+            record = {"url": url, "etag": etag}
+            if expected_sha256:
+                record["sha256"] = expected_sha256
+            src.write_text(json.dumps(record), encoding="utf-8")
         except OSError:
             pass
 
@@ -2749,10 +2761,11 @@ class StallNote:
                 "and run the same command again: the download continues where it stopped")
 
 
-def parallel_download(url: str, part: Path, total: int, label: str, conns: int, name: str) -> bool:
+def parallel_download(url: str, part: Path, total: int, label: str, conns: int, name: str,
+                      expected_sha256: str | None = None) -> bool:
     """Fill `part` (total bytes) over `conns` ranged connections.  True when every byte is there; False when the server
     does not do ranges (the caller reads the file in one stream)."""
-    src = _Source(url, total)
+    src = _Source(url, total, expected_sha256=expected_sha256)
     try:
         src.resolve()
     except _NoRange:
@@ -2760,7 +2773,7 @@ def parallel_download(url: str, part: Path, total: int, label: str, conns: int, 
     except (OSError, http.client.HTTPException):
         return False                                    # the one-stream path has its own retries and messages
     part.parent.mkdir(parents=True, exist_ok=True)
-    _claim_part(part, url, src.etag)                    # a .part from another address or version is dropped here
+    _claim_part(part, url, src.etag, expected_sha256=expected_sha256)   # keep only pieces of the same source/content
     done = _load_pieces(part, total)
     st = _Pieces(total, done, conns)
     if not part.exists():
@@ -2897,13 +2910,13 @@ def _repair_piece(src: _Source, st: _Pieces, f, i: int, stats: dict):
         st.stop.wait(max(DL_BACKOFF * 2 ** (tries - 1), ra) if wait is None else wait)
 
 
-def repair_download(url: str, path: Path, total: int, label: str, conns: int):
+def repair_download(url: str, path: Path, total: int, label: str, conns: int, expected_sha256: str | None = None):
     """A finished file whose SHA-256 is wrong is not thrown away: read it again from the server piece by piece, compare
     each block with the disk and write only the blocks that differ.  Returns (damaged pieces, pieces), or None when the
     server cannot do it (no ranges, or the file there is another one); the caller checks the SHA-256 again."""
     if not total or path.stat().st_size != total:
         return None
-    src = _Source(url, total)
+    src = _Source(url, total, expected_sha256=expected_sha256)
     try:
         src.resolve()
     except (_NoRange, _Changed, OSError, http.client.HTTPException):
@@ -3078,7 +3091,11 @@ def download(url, dst: Path, what=None):
     label = what or dst.name
     conns = dl_connections()
     fixed = pin if pin else (meta if meta is not None and meta[1] else None)
-    again = (lambda: repair_download(url, dst, total, label, conns)) if total >= DL_MIN_PARALLEL and conns > 1 else None
+    # ModelScope's range responses can carry different CDN ETags for the same content. Only a pinned
+    # SHA-256 allows that: range/length checks stay strict and the whole file must pass verify_sha256 below.
+    sha_identity = pin[1] if ms is not None and pin and re.fullmatch(r"[0-9a-fA-F]{64}", pin[1] or "") else None
+    identity_args = {"expected_sha256": sha_identity} if sha_identity else {}
+    again = (lambda: repair_download(url, dst, total, label, conns, **identity_args)) if total >= DL_MIN_PARALLEL and conns > 1 else None
     if dst.exists() and total and dst.stat().st_size == total:    # finished by an older setup (no mark yet), or stopped before the check
         if fixed:                                      # a file that has a fixed hash is checked, not just marked
             verify_sha256(dst, *fixed, repair=again)
@@ -3086,7 +3103,7 @@ def download(url, dst: Path, what=None):
             mark(dst)
         ok(f"{what or dst.name} already downloaded")
         return
-    if not (total >= DL_MIN_PARALLEL and conns > 1 and parallel_download(url, part, total, label, conns, dst.name)):
+    if not (total >= DL_MIN_PARALLEL and conns > 1 and parallel_download(url, part, total, label, conns, dst.name, **identity_args)):
         _claim_part(part, url)
         download_single(url, part, total, label)
     if total and part.stat().st_size != total:
